@@ -1,5 +1,6 @@
 # encoding=utf-8
 import asyncio
+import hashlib
 import io
 import logging
 import os.path
@@ -14,7 +15,7 @@ from wpull.errors import NetworkError, ConnectionRefused, ProtocolError, \
 from wpull.network.connection import Connection, SSLConnection
 from wpull.protocol.http.request import Request
 from wpull.protocol.http.stream import Stream
-from wpull.testing.badapp import BadAppTestCase, SSLBadAppTestCase
+from wpull.testing.badapp import BadAppTestCase, SSLBadAppTestCase, Handler
 from tornado.testing import gen_test
 
 
@@ -187,6 +188,40 @@ class StreamTestsMixin:
         self.assertEqual(200, response.status_code)
         self.assertEqual('chunked', response.fields['Transfer-Encoding'])
         self.assertEqual(b'hello world!', content)
+
+    @gen_test(timeout=30)
+    async def test_payload_hasher_chunked(self):
+        stream = self.new_stream()
+        request = Request(self.get_url('/chunked'))
+        await stream.reconnect()
+        await stream.write_request(request)
+        response = await stream.read_response()
+        response.payload_hasher = hashlib.sha1()
+        content = io.BytesIO()
+        await stream.read_body(request, response, content)
+
+        self.assertEqual(b'hello world!', content.getvalue())
+        self.assertEqual(
+            hashlib.sha1(b'hello world!').digest(),
+            response.payload_hasher.digest())
+
+    @gen_test(timeout=30)
+    async def test_payload_hasher_content_encoding(self):
+        stream = self.new_stream()
+        request = Request(self.get_url('/gzip_chunked'))
+        await stream.reconnect()
+        await stream.write_request(request)
+        response = await stream.read_response()
+        response.payload_hasher = hashlib.sha1()
+        content = io.BytesIO()
+        await stream.read_body(request, response, content)
+
+        self.assertEqual(
+            hashlib.sha1(Handler.gzip_sample(None)).digest(),
+            response.payload_hasher.digest())
+        self.assertNotEqual(
+            hashlib.sha1(content.getvalue()).digest(),
+            response.payload_hasher.digest())
 
     @gen_test(timeout=30)
     async def test_basic_chunked_trailer(self):
